@@ -4,6 +4,7 @@
 #define SCREEN_H
 
 #include "fuji_typedefs.h"
+#include "a8defines.h"
 
 #define FONT_MEMORY 0x7800
 
@@ -22,6 +23,12 @@ typedef enum
 } _screen;
 
 #define screen_input(x, y, s) _screen_input((x), (y), (s), sizeof(s))
+
+void StrInv(unsigned char *pS, byte bS);
+void StrAI(unsigned char *pS, byte bS);
+void StrIA(unsigned char *pS, byte bS);
+
+
 
 void set_active_screen(unsigned char screen);
 void screen_mount_and_boot();

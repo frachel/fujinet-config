@@ -20,12 +20,18 @@
 #include "globals.h"
 #include "bar.h"
 #include "input.h"
+
+#include "a8defines.h"
+#include "a8defwin.h"
+
 unsigned char *video_ptr;  // a pointer to the memory address containing the screen contents
 unsigned char *cursor_ptr; // a pointer to the current cursor position on the screen
 char _visibleEntries;
 extern bool copy_mode;
 char text_empty[] = "Empty";
 char fn[256];
+
+byte win1;
 
 // The currently active screen (basically each time a different displaylist is used that will be considered a screen)
 // Used by 'set_cursor' so it knows the layout of the screen and can properly figure out the memory offset needed whengiven an (x, y) coordinate pair.
@@ -941,15 +947,280 @@ void screen_hosts_and_devices_long_filename(char *f)
   // show_line_nums();
 }
 
+void WInit(void)
+{
+    byte bL;
+
+    // Setup cursor and screen
+    POKE(ACURIN, 1);
+    POKE(ALMARG, 0);
+    clrscr();
+    // Trick to prevent block in upper left
+    gotoxy(39,24);
+
+    // Clear window memory
+    memset(baWM, 0, WBUFSZ);
+
+    // Set index into window memory
+    cpWM = baWM;
+
+    // Work on 10 window+system handles
+    for(bL=0; bL < 11; bL++) {
+        // Clear window handle record vars
+        baW[bL].bU = WOFF;
+        baW[bL].bX = 0;
+        baW[bL].bY = 0;
+        baW[bL].bW = 0;
+        baW[bL].bH = 0;
+        baW[bL].bI = WOFF;
+        baW[bL].cM = baWM;  // base storage location
+        baW[bL].cZ = 0;
+    }
+
+    // Set virtual cursor coords
+    vCur.vX = 0;
+    vCur.vY = 0;
+}
+
+void WBack(byte bN)
+{
+    // Fill screen memory with char
+    memset((void *) PEEKW(RSCRN), bN, 960);
+}
+
+byte WOpen(byte x, byte y, byte w, byte h, byte bT)
+{
+    byte bR = WENONE;
+    byte bL, bD, bC;
+    byte cL[41];
+    word pS;
+
+    // Cycle through handles (exluding system)
+    for(bL=0; bL <= 10; bL++) {
+        // If handle is not in use
+        if (baW[bL].bU == WOFF) {
+            // Set handle in use
+            baW[bL].bU = WON;
+
+            // Set storage address and size
+            baW[bL].cM = cpWM;
+            baW[bL].cZ = w * h;
+
+            // Set other handle vars
+            baW[bL].bX = x;
+            baW[bL].bY = y;
+            baW[bL].bW = w;
+            baW[bL].bH = h;
+            baW[bL].bI = bT;
+
+            // Find top left corner of window in memory
+            pS = PEEKW(RSCRN) + (y * 40) + x;
+
+            // Draw window
+            for(bD=0; bD <= h-1; bD++) {
+                // Build window line as string (internal char codes)
+
+                // If top or bottom line ("+-+")
+                if ((bD == 0) || (bD == h-1)) {
+                    // Set solid line
+                    memset(cL, 82, w);
+
+                    // Top line corners
+                    if (bD == 0) {
+                        cL[0] = 81;
+                        cL[w-1] = 69;
+                    }
+                    // Bottom line corners
+                    else {
+                        cL[0] = 90;
+                        cL[w-1] = 67;
+                    }
+                }
+                // Middle line "| |"
+                else {
+                    // Set space and sides
+                    memset(cL, 0, w);
+                    cL[0] = 124;
+                    cL[w-1] = 124;
+                }
+
+                // If inverse flag, flip line
+                if (bT == WON) {
+                    for (bC=0; bC <= w-1; bC++) {
+                        cL[bC] ^= 128;
+                    }
+                }
+
+                // Save underlying screen to win mem
+                memcpy(cpWM, pS, w);
+                // Inc mem ptr index by win width
+                cpWM += w;
+                // Move line to screen
+                memcpy(pS, cL, w);
+                // Inc screen by 40 to next line start
+                pS += 40;
+            }
+
+            // Set return to handle number
+            bR = bL;
+
+            // Exit loop
+            break;
+        }
+    }
+
+    return(bR);
+}
+
+byte WPrint(byte bN, byte x, byte y, byte bI, unsigned char *pS)
+{
+    byte bR = WENOPN;
+    byte bL;
+    word cS;
+    unsigned char cL[129];
+
+    // Only if handle is in use
+    if (baW[bN].bU == WON) {
+        // Copy string to line buffer
+        strcpy(cL, pS);
+        bL = strlen(cL);
+
+        // Ensure text wont overrun
+        // Check len not > width-x-1.
+        // x is column offset.
+        // width includes frames, remove 1
+        // instead of 2 due to x as 1 based
+        if (bL > baW[bN].bW-x-1) {
+            // Add terminator, get new length
+            cL[baW[bN].bW-x-1] = '\0';
+            bL = strlen(cL);
+        }
+
+        // Convert from ATA to Int
+        StrAI(cL, bL);
+
+        // Make inverse if ON
+        if ((baW[bN].bI == WON) || (bI == WON)) {
+            StrInv(cL, bL);
+        }
+
+        // Find top left corner of window in scrn mem (inside frame)
+        cS = PEEKW(RSCRN) + (baW[bN].bY*40) + baW[bN].bX;
+
+        // Add 40 for each row (Y)
+        cS += (y * 40);
+
+        // If not center, move to X pos
+        if (x != WPCNT) {
+            // Add x for column
+            cS += x;
+        }
+        // Else move to centered position
+        else {
+            cS += ((baW[bN].bW - bL)/2);
+        }
+
+        // Move line to screen
+        memcpy(cS, cL, bL);
+
+        // Set valid return
+        bR = 0;
+    }
+
+    return(bR);
+}
+
+void StrInv(unsigned char *pS, byte bS)
+{
+    byte bL;
+
+    // Loop through number of requested chars
+    for (bL=0; bL < bS; bL++) {
+        // Dereference, change char value by 128, increment pointer
+        *(pS++) ^= 128;
+    }
+}
+
+void StrAI(unsigned char *pS, byte bS)
+{
+    byte bL;
+
+    // Process each element
+    for (bL=0; bL < bS; bL++) {
+        if ((*(pS) >= 0) && (*(pS) <= 31)) {
+            *(pS) += 64;
+        }
+        else if ((*(pS) >= 32) && (*(pS) <= 95)) {
+            *(pS) -= 32;
+        }
+        else if ((*(pS) >= 128) && (*(pS) <= 159)) {
+            *(pS) += 64;
+        }
+        else if ((*(pS) >= 160) && (*(pS) <= 223)) {
+            *(pS) -= 32;
+        }
+
+        // Increment pointer to next char
+        *pS++;
+    }
+}
+
+
+// ------------------------------------------------------------
+// Func...: void StrIA(unsigned char *pS, byte bS)
+// Desc...: Converts string from internal code to ATASCII code
+// Param..: pS = pointer to string to convert
+//          bS = size (number) of chars in string to convert
+// Notes..: Manual iteration so we can process space which has
+//          0 as internal code (c string terminator).
+// ------------------------------------------------------------
+void StrIA(unsigned char *pS, byte bS)
+{
+    byte bL;
+
+    // Process each element
+    for (bL=0; bL < bS; bL++) {
+        if ((*(pS) >= 0) && (*(pS) <= 63)) {
+            *(pS) += 32;
+        }
+        else if ((*(pS) >= 64) && (*(pS) <= 95)) {
+            *(pS) -= 64;
+        }
+        else if ((*(pS) >= 128) && (*(pS) <= 154)) {
+            *(pS) += 32;
+        }
+        else if ((*(pS) >= 160) && (*(pS) <= 191)) {
+            *(pS) += 32;
+        }
+        else if ((*(pS) >= 192) && (*(pS) <= 223)) {
+            *(pS) -= 64;
+        }
+
+        // Incement pointer to next char
+        *pS++;
+    }
+}
+
+
 void screen_init(void)
 {
-  memcpy((void *)DISPLAY_LIST, &config_dlist, sizeof(config_dlist)); // copy display list to $0600
-  OS.sdlst = (void *)DISPLAY_LIST;                                   // and use it.
-  video_ptr = (unsigned char *)(DISPLAY_MEMORY);                     // assign the value of DISPLAY_MEMORY to video_ptr
+  //memcpy((void *)DISPLAY_LIST, &config_dlist, sizeof(config_dlist)); // copy display list to $0600
+  //OS.sdlst = (void *)DISPLAY_LIST;                                   // and use it.
+  //video_ptr = (unsigned char *)(DISPLAY_MEMORY);                     // assign the value of DISPLAY_MEMORY to video_ptr
 
-  font_init();
-  bar_setup_regs();
-  bar_clear(false);
+  //font_init();
+  //bar_setup_regs();
+  //bar_clear(false);
+
+  WInit();
+  WBack(14);
+  win1 = WOpen(0, 0, 40, 3, WON);
+  WPrint(win1, WPCNT, 1, WOFF, "D E M O N S T R A T I O N");
+
+  while (!kbhit())
+  {
+  }
+  cgetc();
 
   selected_host_slot = 0;
   selected_device_slot = 0;

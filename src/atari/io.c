@@ -49,7 +49,7 @@ void io_init(void)
   OS.color2 = 0x90;
   OS.color4 = 0x90;
   OS.coldst = 1;
-  OS.sdmctl = 0; // Turn off screen
+  //OS.sdmctl = 0; // Turn off screen
 }
 
 bool io_get_wifi_enabled(void)
